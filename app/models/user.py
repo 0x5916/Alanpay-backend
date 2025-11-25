@@ -2,11 +2,13 @@ from datetime import datetime
 from decimal import Decimal
 from sqlalchemy import text, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import Relationship, SQLModel, Field
+from sqlmodel import Relationship, SQLModel, Field, table
 
-from app.models.transaction import Transaction
-from typing import Optional, Self, Sequence
+from typing import TYPE_CHECKING, Optional, Self, Sequence
 
+if TYPE_CHECKING:
+    from app.models.qrcode import QRCode
+    from app.models.transaction import Transaction
 
 class UserBase(SQLModel):
     pass
@@ -23,6 +25,14 @@ class User(UserBase, table=True):
             "lazy": "selectin", 
             "foreign_keys": "Transaction.user_id",
             "primaryjoin": "User.id == Transaction.user_id"
+        }
+    )
+    qrcodes: list["QRCode"] = Relationship(
+        back_populates="user",
+        sa_relationship_kwargs={
+            "lazy": "selectin", 
+            "foreign_keys": "QRCode.user_id",
+            "primaryjoin": "User.id == QRCode.user_id"
         }
     )
 
@@ -70,7 +80,9 @@ class User(UserBase, table=True):
         session: AsyncSession, 
         user_id: int, 
         from_date: datetime
-    ) -> Sequence[Transaction]:
+    ) -> Sequence["Transaction"]:
+        from app.models.transaction import Transaction 
+
         stmt = select(Transaction).where(
             text("user_id = :user_id").bindparams(user_id=user_id),
             text("timestamp >= :from_date").bindparams(from_date=from_date)
@@ -86,9 +98,9 @@ class User(UserBase, table=True):
         from_date: datetime,
         limit: int = 20,
         offset: int = 0
-    ) -> Sequence[Transaction]:
+    ) -> Sequence["Transaction"]:
 
-        stmt = select(Transaction).where(
+        stmt = select(text("transaction")).where(
             text("user_id = :user_id").bindparams(user_id=user_id),
             text("timestamp >= :from_date").bindparams(from_date=from_date)
         ).order_by(text("timestamp DESC")).limit(limit).offset(offset)

@@ -2,7 +2,7 @@ from pydantic import BaseModel
 from datetime import datetime
 from typing import List, Optional
 
-from app.models.transaction import MoneyDecimal
+from app.models.transaction import IntegerDecimal, MoneyDecimal
 
 
 class PaymentResponse(BaseModel):
@@ -62,14 +62,14 @@ class QRRequest(PaymentRequest):
     pass
 
 class PaymentCollectionRequest(PaymentRequest):
-    max_usercount: int = 5
+    max_user_count: IntegerDecimal
     expire: Optional[datetime] = None
 
     model_config = {
         "json_schema_extra": {
             "example": {
                 "amount": "100.00",
-                "max_usercount": 5,
+                "max_user_count": "5",
                 "description": "Group payment for dinner"
             }
         }

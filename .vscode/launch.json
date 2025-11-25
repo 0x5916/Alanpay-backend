@@ -22,6 +22,8 @@
                 "8000",
                 "--reload"
             ],
+            "preLaunchTask": "Docker Compose Up DB",
+            "postDebugTask": "Docker Compose Down",
             "envFile": "${workspaceFolder}/dev.env",
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal"

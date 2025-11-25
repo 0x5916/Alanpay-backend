@@ -27,3 +27,7 @@ class InsufficientBalanceException(TransactionException):
 class InvalidAmountException(TransactionException):
     def __init__(self, detail: str = "Invalid amount"):
         super().__init__(detail)
+
+class InvalidQRPaymentException(TransactionException):
+    def __init__(self, detail: str = "QR payment must have a valid QR code"):
+        super().__init__(detail)

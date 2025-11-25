@@ -11,11 +11,14 @@ if TYPE_CHECKING:
 
 MoneyDecimal = Annotated[Decimal, Field(max_digits=18, decimal_places=2)]
 
+IntegerDecimal = Annotated[int, Field(ge=0, le=2**31-1)]
+
 class TransactionType(str, Enum):
     TOPUP = "topup"
     WITHDRAWAL = "withdrawal"
     TRANSFER_SENT = "transfer_sent"
     TRANSFER_RECEIVED = "transfer_received"
+    QR_PAYMENT = "qr_payment"
 
 class Transaction(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
@@ -50,12 +53,6 @@ class Transaction(SQLModel, table=True):
             "primaryjoin": "Transaction.qr_id == QRCode.id"
         }
     )
-
-class TransactionCreate(SQLModel):
-    amount: MoneyDecimal
-    transaction_type: TransactionType
-    description: Optional[str] = None
-    reference_user_id: Optional[int] = None
 
 class TransactionPublic(SQLModel):
     id: int

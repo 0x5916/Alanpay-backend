@@ -31,6 +31,16 @@
             }
         },
         {
+            "label": "Docker Compose Up DB",
+            "type": "shell",
+            "command": "docker-compose up alanpay_db -d",
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
+        },
+        {
             "label": "Docker Compose Down",
             "type": "shell",
             "command": "docker-compose down",

@@ -4,14 +4,14 @@ import json
 from typing import Optional, TYPE_CHECKING
 from sqlmodel import Field, Relationship, SQLModel, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from textwrap import dedent
 from sqlalchemy import delete, select
+from sqlalchemy.orm import selectinload
 
-from app.models.transaction import MoneyDecimal
-
+from app.models.transaction import MoneyDecimal, IntegerDecimal
 
 if TYPE_CHECKING:
     from app.models.transaction import Transaction
+    from app.models.user import User
 
 class QRType(Enum):
     REQUEST_PAYMENT = "request_payment"  # You request money from others
@@ -21,10 +21,19 @@ class QRCode(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     qr_id: str = Field(index=True, unique=True, nullable=False)
     qr_type: QRType = Field(nullable=False)
-    max_use_count: Optional[int] = Field(default=None, nullable=True)
+    max_use_count: IntegerDecimal = Field(default=None, nullable=True)
     amount: Optional[MoneyDecimal] = Field(default=None, nullable=True)
     created_at: datetime = Field(default_factory=datetime.now, nullable=False)
     expire: Optional[datetime] = Field(default=None, nullable=True)
+
+    user_id: int = Field(foreign_key="user.id", index=True)
+    user: "User" = Relationship(
+        back_populates="qrcodes",
+        sa_relationship_kwargs={
+            "foreign_keys": "QRCode.user_id",
+            "primaryjoin": "QRCode.user_id == User.id"
+        }
+    )
 
     # Relationship to transactions
     transactions: list["Transaction"] = Relationship(
@@ -38,16 +47,20 @@ class QRCode(SQLModel, table=True):
 
     @classmethod
     async def get_by_qr_id(cls, session: AsyncSession, qr_id: str) -> Optional["QRCode"]:
-        stmt = select(cls).where(cls.qr_id == qr_id).limit(1) # type: ignore
+        stmt = select(cls).options(selectinload(cls.user)).where(cls.qr_id == qr_id).limit(1) # type: ignore
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
     async def current_use_count(self, session: AsyncSession) -> int:
-        stmt = text("SELECT COUNT(*) FROM transaction WHERE qr_id = :id")\
+        stmt = text("SELECT COUNT(*) FROM transaction WHERE qr_id = :id AND user_id = (SELECT user_id FROM qrcode WHERE id = :id LIMIT 1)")\
             .bindparams(id=self.id)
         result = await session.execute(stmt)
         cnt = result.scalar()
         return cnt or 0
+    
+    async def is_exceed_limit(self, session: AsyncSession) -> bool:
+        current_count = await self.current_use_count(session)
+        return current_count >= self.max_use_count
 
     def to_qrcode_dict(self) -> dict:
         return {

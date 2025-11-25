@@ -1,13 +1,16 @@
+from base64 import b64encode
 from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 from fastapi import APIRouter, Depends, Query, Request, Response
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.utils.database import AsyncSessionDep
-from app.exceptions.user import UserNotFoundException
+from app.exceptions.user import UnauthorizedException, UserNotFoundException
 from app.models.qrcode import QRCode, QRType
 from app.models.user import User
-from app.models.transaction import Transaction, TransactionType
+from app.models.transaction import MoneyDecimal, Transaction, TransactionType
 from app.models.payment import PaymentRequest, PaymentResponse, BalanceHistoryResponse, BalanceHistoryItem, QRCodeResponse, QRRequest, TransferRequest, PaymentCollectionRequest
 from app.utils.security import get_current_user
 from app.exceptions.payment import InvalidAmountException, InsufficientBalanceException, TransactionNotFoundException
@@ -182,28 +185,36 @@ async def get_history(
     session: AsyncSessionDep,
     current_user: User = Depends(get_current_user),
     history_months: int = Query(6, ge=1, le=24, description="Number of months of history to retrieve"),
-    page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(20, ge=1, le=100, description="Number of items per page")
+    # page: int = Query(1, ge=1, description="Page number"),
+    # page_size: int = Query(20, ge=1, le=100, description="Number of items per page")
 ):
     try:
         cutoff_date = datetime.now() - timedelta(days=30 * history_months)
         
         # Get paginated transaction results instead of balance
-        offset = (page - 1) * page_size
-        filtered_transactions = await User.get_transactions_by_date_paginated(
-            session=session,
-            user_id=current_user.id,
-            from_date=cutoff_date,
-            limit=page_size,
-            offset=offset
-        )
-        
+        # offset = (page - 1) * page_size
+        # filtered_transactions = await User.get_transactions_by_date_paginated(
+        #     session=session,
+        #     user_id=current_user.id,
+        #     from_date=cutoff_date,
+        #     limit=page_size,
+        #     offset=offset
+        # )
+
         # Count total transactions for pagination info
-        total_count = await User.count_transactions_by_date(
+        # total_count = await User.count_transactions_by_date(
+        #     session=session,
+        #     user_id=current_user.id,
+        #     from_date=cutoff_date
+        # )
+
+        filtered_transactions = await User.get_transactions_by_date(
             session=session,
             user_id=current_user.id,
             from_date=cutoff_date
         )
+        total_count = len(filtered_transactions)
+        print(filtered_transactions)
 
         transaction_items = [
             BalanceHistoryItem(
@@ -226,42 +237,42 @@ async def get_history(
         logger.error(f"Get history failed for user {current_user.username} | Error: {type(e).__name__} | Reason: {str(e)}")
         raise
 
-# @router.get("/transaction/{transaction_id}")
-# async def get_transaction_details(
-#     transaction_id: int,
-#     session: AsyncSessionDep,
-#     current_user: User = Depends(get_current_user)
-# ):
-#     """Get detailed information about a specific transaction"""
-#     try:
-#         transaction = await session.get(Transaction, transaction_id)
+@router.get("/transaction/{transaction_id}")
+async def get_transaction_details(
+    transaction_id: int,
+    session: AsyncSessionDep,
+    current_user: User = Depends(get_current_user)
+):
+    """Get detailed information about a specific transaction"""
+    try:
+        transaction = await session.get(Transaction, transaction_id)
         
-#         if not transaction:
-#             raise TransactionNotFoundException
+        if not transaction:
+            raise TransactionNotFoundException
         
-#         # Verify the transaction belongs to the current user
-#         if transaction.user_id != current_user.id:
-#             raise UnauthorizedException(
-#                 detail="Access denied to this transaction"
-#             )
+        # Verify the transaction belongs to the current user
+        if transaction.user_id != current_user.id:
+            raise UnauthorizedException(
+                detail="Access denied to this transaction"
+            )
         
-#         # Get reference user name if it's a transfer
-#         reference_user_name = None
-#         if transaction.reference_user_id:
-#             reference_user = await session.get(User, transaction.reference_user_id)
-#             reference_user_name = reference_user.username if reference_user else None
+        # Get reference user name if it's a transfer
+        reference_user_name = None
+        if transaction.reference_user_id:
+            reference_user = await session.get(User, transaction.reference_user_id)
+            reference_user_name = reference_user.username if reference_user else None
         
-#         return {
-#             "id": transaction.id,
-#             "amount": f"{transaction.amount:.2f}",
-#             "transaction_type": transaction.transaction_type.value,
-#             "description": transaction.description,
-#             "timestamp": transaction.timestamp.isoformat(),
-#             "reference_user_name": reference_user_name
-#         }
-#     except Exception as e:
-#         logger.error(f"Get transaction details failed for user {current_user.username} | Error: {type(e).__name__} | Reason: {str(e)}")
-#         raise
+        return {
+            "id": transaction.id,
+            "amount": f"{transaction.amount:.2f}",
+            "transaction_type": transaction.transaction_type.value,
+            "description": transaction.description,
+            "timestamp": transaction.timestamp.isoformat(),
+            "reference_user_name": reference_user_name
+        }
+    except Exception as e:
+        logger.error(f"Get transaction details failed for user {current_user.username} | Error: {type(e).__name__} | Reason: {str(e)}")
+        raise
 
 @router.post("/qrcode/request")
 async def qrcode_request(
@@ -280,20 +291,22 @@ async def qrcode_request(
             qr_id=str(uuid4()),
             qr_type=QRType.REQUEST_PAYMENT,
             amount=collect.amount,
-            max_use_count=collect.max_usercount,
-            expire=expire_at
+            max_use_count=collect.max_user_count,
+            expire=expire_at,
+            user_id=current_user.id
         )
+        logger.info(f"Creating QR code for user {current_user.username} | Amount: {collect.amount} | Max Users: {collect.max_user_count} | Expire: {expire_at.isoformat()}")
         session.add(qrcode)
         await session.commit()
         await session.refresh(qrcode)
 
         origin = request.headers.get("origin")
-        url: str = f"{origin}/pay/request/{qrcode.qr_id}" if origin else f"/pay/request/{qrcode.qr_id}"
+        url: str = f"{origin}/pay/scan/request/{qrcode.qr_id}" if origin else qrcode.qr_id
 
         qr_img = create_qr_code(url)
         return Response(
-            content=qr_img,
-            media_type="image/png",
+            content=b64encode(qr_img).decode('utf-8'),
+            media_type="image/png;base64",
             headers={
                 "qr_id": qrcode.qr_id,
                 "qr_url": url,
@@ -307,7 +320,6 @@ async def qrcode_request(
 
 @router.post("/qrcode/send")
 async def qrcode_send(
-    qr: QRRequest,
     session: AsyncSessionDep,
     request: Request,
     current_user: User = Depends(get_current_user)
@@ -317,7 +329,8 @@ async def qrcode_send(
             qr_id=str(uuid4()),
             qr_type=QRType.SEND_PAYMENT,
             max_use_count=1,
-            expire=datetime.now() + timedelta(minutes=1)
+            expire=datetime.now() + timedelta(minutes=1),
+            user_id=current_user.id
         )
         await qrcode.clean_unused_send_qrcodes(session)
         session.add(qrcode)
@@ -325,12 +338,13 @@ async def qrcode_send(
         await session.refresh(qrcode)
 
         origin = request.headers.get("origin")
-        url: str = f"{origin}/pay/scan/{qrcode.qr_id}" if origin else f"/pay/scan/{qrcode.qr_id}"
+        url: str = f"{origin}/pay/scan/send/{qrcode.qr_id}" if origin else qrcode.qr_id
         
         qr_img = create_qr_code(url)
+
         return Response(
-            content=qr_img,
-            media_type="image/png",
+            content=b64encode(qr_img).decode('utf-8'),
+            media_type="image/png;base64",
             headers={
                 "qr_id": qrcode.qr_id,
                 "qr_url": url,
@@ -339,6 +353,142 @@ async def qrcode_send(
         )
     except Exception as e:
         logger.error(f"QR code send failed for user {current_user.username} | Error: {type(e).__name__} | Reason: {str(e)}")
+        await session.rollback()
+        raise
+
+@router.post("/qrcode/scan/{qr_id}")
+async def scan_qrcode(
+    qr_id: str,
+    session: AsyncSessionDep,
+    current_user: User = Depends(get_current_user),
+    amount: MoneyDecimal | None = None
+):
+    try:
+        qrcode = await QRCode.get_by_qr_id(session, qr_id)
+        if not qrcode:
+            raise TransactionNotFoundException("QR code not found")
+        
+        if qrcode.is_expired:
+            raise TransactionNotFoundException("QR code has expired or is invalid")
+        
+        if await qrcode.is_exceed_limit(session):
+            raise TransactionNotFoundException("QR code has reached its maximum usage limit")
+
+        # Handle REQUEST_PAYMENT type (QR owner receives money)
+        if qrcode.qr_type == QRType.REQUEST_PAYMENT:
+            if qrcode.amount is None or qrcode.amount <= Decimal('0.00'):
+                raise InvalidAmountException("QR code has invalid amount")
+            
+            payment_amount = qrcode.amount
+            sender = current_user
+            recipient = qrcode.user
+            
+            # Get usernames before commit to avoid lazy loading issues
+            sender_username = sender.username
+            recipient_username = recipient.username
+            
+            if recipient.id == sender.id:
+                raise InvalidAmountException("Cannot transfer to yourself")
+            
+            sender_balance = await sender.total_balance(session)
+            if payment_amount > sender_balance:
+                raise InsufficientBalanceException(
+                    f"Transfer amount ${payment_amount:.2f} exceeds available balance ${sender_balance:.2f}"
+                )
+            
+            sender_transaction = Transaction(
+                user_id=sender.id,
+                amount=-payment_amount,
+                transaction_type=TransactionType.QR_PAYMENT,
+                description=f"Payment via QR code to {recipient_username}",
+                reference_user_id=recipient.id,
+                qr_id=qrcode.id
+            )
+            
+            recipient_transaction = Transaction(
+                user_id=recipient.id,
+                amount=payment_amount,
+                transaction_type=TransactionType.QR_PAYMENT,
+                description=f"Payment via QR code from {sender_username}",
+                reference_user_id=sender.id,
+                qr_id=qrcode.id
+            )
+            
+            session.add(sender_transaction)
+            session.add(recipient_transaction)
+            
+            await session.commit()
+            await session.refresh(sender_transaction)
+            await session.refresh(sender)
+            
+            return PaymentResponse(
+                message=f"QR Payment to {recipient_username} processed successfully",
+                amount=f"{payment_amount:.2f}",
+                new_balance=f"{await sender.total_balance(session):.2f}",
+                transaction_id=sender_transaction.id,
+                timestamp=sender_transaction.timestamp
+            )
+        
+        # Handle SEND_PAYMENT type (QR owner sends money)
+        elif qrcode.qr_type == QRType.SEND_PAYMENT:
+            if amount is None or amount <= Decimal('0.00'):
+                raise InvalidAmountException("Amount must be specified and greater than zero")
+            
+            payment_amount = amount
+            sender = qrcode.user
+            recipient = current_user
+            
+            # Get usernames before commit to avoid lazy loading issues
+            sender_username = sender.username
+            recipient_username = recipient.username
+            
+            if recipient.id == sender.id:
+                raise InvalidAmountException("Cannot transfer to yourself")
+            
+            sender_balance = await sender.total_balance(session)
+            if payment_amount > sender_balance:
+                raise InsufficientBalanceException(
+                    f"Transfer amount ${payment_amount:.2f} exceeds available balance ${sender_balance:.2f}"
+                )
+            
+            sender_transaction = Transaction(
+                user_id=sender.id,
+                amount=-payment_amount,
+                transaction_type=TransactionType.QR_PAYMENT,
+                description=f"Payment via QR code to {recipient_username}",
+                reference_user_id=recipient.id,
+                qr_id=qrcode.id
+            )
+            
+            recipient_transaction = Transaction(
+                user_id=recipient.id,
+                amount=payment_amount,
+                transaction_type=TransactionType.QR_PAYMENT,
+                description=f"Payment via QR code from {sender_username}",
+                reference_user_id=sender.id,
+                qr_id=qrcode.id
+            )
+            
+            session.add(sender_transaction)
+            session.add(recipient_transaction)
+            
+            await session.commit()
+            await session.refresh(recipient_transaction)
+            await session.refresh(recipient)
+            
+            return PaymentResponse(
+                message=f"QR Payment from {sender_username} processed successfully",
+                amount=f"{payment_amount:.2f}",
+                new_balance=f"{await recipient.total_balance(session):.2f}",
+                transaction_id=recipient_transaction.id,
+                timestamp=recipient_transaction.timestamp
+            )
+        
+        else:
+            raise TransactionNotFoundException("Invalid QR code type")
+            
+    except Exception as e:
+        logger.error(f"Scan QR code failed for user {current_user.username} | QR ID: {qr_id} | Error: {type(e).__name__} | Reason: {str(e)}")
         await session.rollback()
         raise
 
